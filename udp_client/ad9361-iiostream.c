@@ -35,11 +35,13 @@ void DieWithError(char *errorMessage)
 typedef struct
 {
         int receiving_active;
+        int sending_active;
         long long sent_count;
         long long recv_count;
         struct sockaddr_in ServAddr;
         struct sockaddr_in ClntAddr;
 	int sock;
+	pthread_t recv_thread;
 } handler;
 	
 time_t sec_begin, sec_end, sec_elapsed;
@@ -58,26 +60,19 @@ void send_msg()
 	int sndlen = send(phandler->sock,tx_buff, TX_BUFF_SIZE, 0);
 	if(sndlen<0)
 		DieWithError("Send msg failed");
-
-	phandler->sent_count+=sndlen;
+	else
+		phandler->sent_count+=sndlen;
        	
 	//printf("Sent %d kB\n",sndlen/1024);
 }
 
-void recv_msg()
+int recv_msg()
 {
 	int rsplen = recv(phandler->sock,rx_buff,RX_BUFF_SIZE, 0);
-	if(errno==EAGAIN) 
-	{ 
-		setsockopt(phandler->sock, SOL_SOCKET, 0,&tv,sizeof(tv));
-	        printf("Receive timeout is reached\n");  
-	}
+	if(rsplen>0)
+		phandler->recv_count+=rsplen;
 
-	if(rsplen< 0)  
-		DieWithError("Recv msg failed");
-	
-	phandler->recv_count+=rsplen;
-
+	return rsplen;
 	//printf("Received %lld kB\n",recvcount/1024);
 }
 
@@ -107,14 +102,20 @@ static struct iio_buffer  *txbuf = NULL;
 /* cleanup and exit */
 void shutdowniio(int s)
 {
+	phandler->receiving_active = 0;
+	phandler->sending_active = 0;
+	pthread_join(phandler->recv_thread, NULL);
+
 	// Timing calculation
 	sec_end=time(NULL);
 	sec_elapsed=sec_end-sec_begin;
 	
-	printf("Elapsed time: %lu s, UDP bytes received %llu MB, UDP received bandwidth %llu Mbps \n", sec_elapsed,phandler->recv_count/1024/1024,phandler->recv_count*8/sec_elapsed/1024/1024);
+	printf("Elapsed time: %lu s\nUDP bytes received %llu MB, UDP received bandwidth %llu Mbps \n", sec_elapsed,phandler->recv_count/1024/1024,phandler->recv_count*8/sec_elapsed/1024/1024);
 	printf("UDP bytes sent %llu MB, UDP sent bandwidth %llu Mbps \n", phandler->sent_count/1024/1024,phandler->sent_count*8/sec_elapsed/1024/1024);
 
-	printf("Socket sended %lld \n",phandler->sent_count);
+	printf("Destroying the socket\n");
+	close(phandler->sock);
+
 	printf("Destroying buffers\n");
 	if (rxbuf) { iio_buffer_destroy(rxbuf); }
 	if (txbuf) { iio_buffer_destroy(txbuf); }
@@ -126,11 +127,10 @@ void shutdowniio(int s)
 	if (tx0_q) { iio_channel_disable(tx0_q); }
 
 
-	printf("* Destroying context\n");
+	printf("Destroying context\n");
 	if (ctx) 
-	{ 
 		iio_context_destroy(ctx); 
-	}
+	
 	free(phandler);
 	exit(0);
 }
@@ -230,7 +230,7 @@ bool cfg_ad9361_streaming_ch(struct iio_context *ctx, struct stream_cfg *cfg, en
 void* receive_from_server(void* arg)
 {
 	// Listen to ctrl+c and assert
-	signal(SIGINT, shutdowniio);
+	// signal(SIGINT, shutdowniio);
 	
 	struct iio_device *tx;		// Streaming devices
 	struct stream_cfg txcfg;	// Stream configurations
@@ -258,19 +258,20 @@ void* receive_from_server(void* arg)
 	while(phandler->receiving_active)
       	{
 		// Fill rx_buff from network
-		recv_msg();
-		
-		// Send rx_buff to ad9361
-		t_dat = iio_buffer_first(txbuf,tx0_i);
-		memcpy(t_dat,rx_buff,RX_BUFF_SIZE);
-		nbytes_tx = iio_buffer_push(txbuf);
-		if (nbytes_tx < 0) 
-		{ 
-			printf("Error pushing the buffer to ad9361 %d\n", (int) nbytes_tx); 
-			shutdowniio(0); 
+		if(recv_msg())
+		{
+			// Send rx_buff to ad9361
+			t_dat = iio_buffer_first(txbuf,tx0_i);
+			memcpy(t_dat,rx_buff,RX_BUFF_SIZE);
+			nbytes_tx = iio_buffer_push(txbuf);
+			if (nbytes_tx < 0) 
+			{ 
+				printf("Error pushing the buffer to ad9361 %d\n", (int) nbytes_tx); 
+				shutdowniio(0); 
+			}
 		}
+		
 	}
-	printf("Time elapsed: %lu s, UDP bytes received %llu MB, UDP received bandwidth %llu Mbps \n ", sec_elapsed,phandler->recv_count/1024/1024,phandler->recv_count*8/sec_elapsed/1024/1024);
 	return NULL;
 }
 
@@ -291,6 +292,7 @@ int main (int argc, char **argv)
 	// Allocate handler
 	phandler = malloc(sizeof(handler));
         phandler->receiving_active = 1;
+        phandler->sending_active = 1;
         phandler->recv_count = 0;
         phandler->sent_count = 0;
 
@@ -332,8 +334,7 @@ int main (int argc, char **argv)
 		DieWithError("socket() failed");
 	
 	// Start the receiving thread
-	pthread_t recv_thread;
-	if(pthread_create(&recv_thread, NULL, &receive_from_server,NULL)) 
+	if(pthread_create(&phandler->recv_thread, NULL, &receive_from_server,NULL)) 
 		DieWithError("starting thread failed");
 
 	printf("Sending to server...\n");
@@ -342,7 +343,7 @@ int main (int argc, char **argv)
 	void *p_dat;
 
 	sec_begin=time(NULL);
-	while(sec_elapsed<20)
+	while(sec_elapsed<20 && phandler->sending_active)
 	{
 		// Timings
 		sec_end=time(NULL);
@@ -361,12 +362,8 @@ int main (int argc, char **argv)
 		memcpy (tx_buff, p_dat, TX_BUFF_SIZE);
 		send_msg();
 	}
-	printf("Elapsed time: %ld, UDP bytes sent %llu MB, UDP sent bandwidth %llu Mbps \n ", sec_elapsed,phandler->sent_count/1024/1024,phandler->sent_count*8/sec_elapsed/1024/1024);
-	
-	if(pthread_join(recv_thread, NULL)) 
-		DieWithError("joining thread failed");
-	
-	close(phandler->sock);
+
+	shutdowniio(0);	
 	return 0;
 }
 

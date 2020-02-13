@@ -39,28 +39,25 @@ void DieWithError(char *errorMessage)
 	exit(1);
 }
 
-void stream_to_client()
+void* stream_to_client(void* arg)
 {
-	unsigned int cliAddrLen;
 	char Buffer[TX_BUFF_SIZE];				/* Buffer for echo string */
 	memset(&Buffer,0,sizeof(Buffer) );
 
-	while(1)
+	printf("Streaming to the client, TX buffer size: %d\n", TX_BUFF_SIZE);
+
+	while(phandler->stream_active)
 	{
-		printf("Streaming to the client, TX buffer size: %d\n", TX_BUFF_SIZE);
+		int sendMsgSize = sendto(phandler->sock,Buffer, TX_BUFF_SIZE, 0,(struct sockaddr*) &(phandler->ClntAddr), sizeof(phandler->ClntAddr));
 
-		
-		while(phandler->stream_active)
-		{
-			int sendMsgSize = send(phandler->sock,Buffer, TX_BUFF_SIZE, 0); 
+	        if (sendMsgSize<0)
+			DieWithError("Send msg failed");
 
-		        if ( sendMsgSize<0)
-				DieWithError("sendto() failed");
-
-			phandler->sent_count+=sendMsgSize;
-		}
-		printf("Sent %lld MB\n",phandler->sent_count/1024/1024);
+		phandler->sent_count+=sendMsgSize;
 	}
+	printf("Sent %lld MB\n",phandler->sent_count/1024/1024);
+	
+	return NULL;
 }
 
 
@@ -68,7 +65,6 @@ int main(int argc, char *argv[])
 {
 	char Buffer[RX_BUFF_SIZE];				/* Buffer for echo string */
 	int recvMsgSize;		    		/* Size of received message */
-	tv.tv_sec = 2;					/* Set the timeout for recv/recvfrom*/
 	
 	struct sockaddr_in ServAddr;
 	memset(&ServAddr, 0, sizeof(ServAddr));
@@ -76,14 +72,12 @@ int main(int argc, char *argv[])
 	ServAddr.sin_addr.s_addr = htonl(INADDR_ANY); 	/* Any incoming interface */
 	ServAddr.sin_port = htons(SERV_PORT);	  	/* Local port */
 	
-	struct sockaddr_in ClntAddr;
-	memset(&ClntAddr, 0, sizeof(ClntAddr));
-	unsigned int cliAddrLen;
-
 	phandler = malloc(sizeof(handler));
 	phandler->stream_active = 1;
 	phandler->recv_count = 0;
 	phandler->sent_count = 0;
+	
+	memset(&(phandler->ClntAddr), 0, sizeof(phandler->ClntAddr));
 
         printf("Waiting for udp messages...\n");
 	/* Create socket for receiving datagrams */
@@ -99,22 +93,24 @@ int main(int argc, char *argv[])
 	if (bind(phandler->sock, (struct sockaddr *) &ServAddr, sizeof(ServAddr)) < 0)
 		DieWithError("bind() failed");
 		
-	/* Set the size of the in-out parameter */
-	cliAddrLen = sizeof(ClntAddr);
-	
 	/* Block until receive message from a client */
-	if ((recvMsgSize = recvfrom(phandler->sock, Buffer, RX_BUFF_SIZE, 0,(struct sockaddr *) &ClntAddr, &cliAddrLen)) < 0)
+	unsigned int cliAddrLen = sizeof(phandler->ClntAddr);
+	if ((recvMsgSize = recvfrom(phandler->sock, Buffer, RX_BUFF_SIZE, 0,(struct sockaddr *) &(phandler->ClntAddr), &cliAddrLen)) < 0)
                	DieWithError("recvfrom() failed");
 	
 	phandler->recv_count += recvMsgSize;
 		
-	printf("Handling client %s, RX message size: %d bytes\n", inet_ntoa(ClntAddr.sin_addr),recvMsgSize);
+	printf("Handling client %s, RX message size: %d bytes\n", inet_ntoa(phandler->ClntAddr.sin_addr),recvMsgSize);
 		
 	/* Set waiting limit */
+	tv.tv_sec = 1;					/* Set the timeout for recv/recvfrom*/
 	if (setsockopt(phandler->sock, SOL_SOCKET, SO_RCVTIMEO,&tv,sizeof(tv)) < 0)
 		DieWithError("Error");
 
 	/* Start streaming */
+	pthread_t stream_thread;
+	if(pthread_create(&stream_thread, NULL, &stream_to_client,NULL))
+                DieWithError("starting thread failed");
 	
 	/*Reciving*/
 	while(1)
@@ -131,12 +127,13 @@ int main(int argc, char *argv[])
 			DieWithError("Reciving failed\n");
 			
 		phandler->recv_count += recvMsgSize;
-	}//End local while
+	}
 
+	pthread_join(stream_thread, NULL);
 	printf("Received %lld MB in total\n",phandler->recv_count/1024/1024);
 	close(phandler->sock);
 	free(phandler);
 	
 	return 0;
-}//End of life
+}
 
