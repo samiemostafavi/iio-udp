@@ -36,12 +36,14 @@ typedef struct
 {
         int receiving_active;
         int sending_active;
+	int timedif_active;
         long long sent_count;
         long long recv_count;
         struct sockaddr_in ServAddr;
         struct sockaddr_in ClntAddr;
 	int sock;
 	pthread_t recv_thread;
+	pthread_t tdif_thread;
 } handler;
 	
 time_t sec_begin, sec_end, sec_elapsed;
@@ -55,14 +57,15 @@ int rx_buff[RX_BUFF_SIZE] = {0};
 
 struct timeval tv;
 
-void send_msg()
+int send_msg()
 {
 	int sndlen = send(phandler->sock,tx_buff, TX_BUFF_SIZE, 0);
 	if(sndlen<0)
 		DieWithError("Send msg failed");
 	else
 		phandler->sent_count+=sndlen;
-       	
+   
+	return sndlen;	
 	//printf("Sent %d kB\n",sndlen/1024);
 }
 
@@ -102,14 +105,20 @@ static struct iio_buffer  *txbuf = NULL;
 /* cleanup and exit */
 void shutdowniio(int s)
 {
+	// Stop receive thread
 	phandler->receiving_active = 0;
 	phandler->sending_active = 0;
 	pthread_join(phandler->recv_thread, NULL);
-
+	
 	// Timing calculation
 	sec_end=time(NULL);
 	sec_elapsed=sec_end-sec_begin;
 	
+	// Stop timedif thread
+	phandler->timedif_active = 0;
+	pthread_join(phandler->tdif_thread, NULL);
+	
+	// Print the report
 	printf("Elapsed time: %lu s\nUDP bytes received %llu MB, UDP received bandwidth %llu Mbps \n", sec_elapsed,phandler->recv_count/1024/1024,phandler->recv_count*8/sec_elapsed/1024/1024);
 	printf("UDP bytes sent %llu MB, UDP sent bandwidth %llu Mbps \n", phandler->sent_count/1024/1024,phandler->sent_count*8/sec_elapsed/1024/1024);
 
@@ -275,6 +284,27 @@ void* receive_from_server(void* arg)
 	return NULL;
 }
 
+// timestamp_dif read thread 
+void* read_timedif(void* arg)
+{
+	char valrx[100];
+	int ret;
+	while(phandler->timedif_active)
+	{
+		int64_t dif_timestamp = 0;
+		// Read tx_timestamp_dif
+		ret = iio_channel_attr_read(tx0_i, "counter_timestamp", &valrx, sizeof(valrx));
+		if(ret<0)
+			printf("reading tx timestamp dif error \n");
+		else
+		{
+			sscanf(valrx,"%lld", &dif_timestamp);
+			printf("tx dif counter_timestamp: %lld \n",dif_timestamp);
+		}
+		sleep(2);
+	}
+	return NULL;
+}
 
 
 /* simple configuration and streaming */
@@ -293,6 +323,7 @@ int main (int argc, char **argv)
 	phandler = malloc(sizeof(handler));
         phandler->receiving_active = 1;
         phandler->sending_active = 1;
+        phandler->timedif_active = 1;
         phandler->recv_count = 0;
         phandler->sent_count = 0;
 
@@ -335,7 +366,11 @@ int main (int argc, char **argv)
 	
 	// Start the receiving thread
 	if(pthread_create(&phandler->recv_thread, NULL, &receive_from_server,NULL)) 
-		DieWithError("starting thread failed");
+		DieWithError("starting recv thread failed");
+	
+	// Start the timedif thread
+	if(pthread_create(&phandler->tdif_thread, NULL, &read_timedif,NULL)) 
+		DieWithError("starting tdif thread failed");
 
 	printf("Sending to server...\n");
 
