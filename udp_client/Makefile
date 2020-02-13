@@ -32,5 +32,4 @@ run:
 	./ad9361-iiostream
 
 clean:
-	clear
 	rm -f $(TARGETS) $(TARGETS:%=%.o)
