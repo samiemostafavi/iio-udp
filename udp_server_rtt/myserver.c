@@ -107,9 +107,14 @@ int main(int argc, char *argv[])
 		rx_timestamp = *rx_timestamp_pointer;		
 		printf("RX timestamp read: %llu, dif: %llu\n",*rx_timestamp_pointer,dif_timestamp);
 
-		memset(&Buffer,0,sizeof(Buffer) );
-		int sendMsgSize = sendto(phandler->sock,Buffer, BUFF_SIZE, 0,(struct sockaddr*) &(phandler->ClntAddr), sizeof(phandler->ClntAddr));
+		// Schedule TX buffer by TX timestamp
+		uint64_t* tx_timestamp_pointer = Buffer+BUFF_SIZE-8;
+		uint64_t old_val = *tx_timestamp_pointer;
+		*tx_timestamp_pointer = rx_timestamp;
+		printf("TX timestamp written: %llu, old_val: %llu\n",*tx_timestamp_pointer,old_val);
 
+		// Send the TX Buffer
+		int sendMsgSize = sendto(phandler->sock,Buffer, BUFF_SIZE, 0,(struct sockaddr*) &(phandler->ClntAddr), sizeof(phandler->ClntAddr));
                 if (sendMsgSize<0)
                         DieWithError("Send msg failed");
 
