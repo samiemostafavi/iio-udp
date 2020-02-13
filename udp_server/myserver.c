@@ -13,8 +13,8 @@
 #include <sys/mman.h>    
 #include <signal.h>    
 
-#define TX_BUFF_SIZE 16*1024
-#define RX_BUFF_SIZE 16*1024
+#define TX_BUFF_SIZE 8*1024
+#define RX_BUFF_SIZE 8*1024
 #define SERV_PORT 50707
 
 struct timeval tv;
