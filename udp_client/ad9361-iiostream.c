@@ -20,8 +20,11 @@
 #define MHZ(x) ((long long)(x*1000000.0 + .5))
 #define GHZ(x) ((long long)(x*1000000000.0 + .5))
 
-#define TX_BUFF_SIZE 16*1024
-#define RX_BUFF_SIZE 16*1024
+#define TX_BUFF_SIZE 8*1024
+#define RX_BUFF_SIZE 8*1024
+
+#define TX_BUFF_SIZE_BYTE TX_BUFF_SIZE*4
+#define RX_BUFF_SIZE_BYTE RX_BUFF_SIZE*4
 
 #define SERV_PORT 50707
 #define SERV_IP "10.0.9.202"
@@ -44,6 +47,7 @@ typedef struct
 	int sock;
 	pthread_t recv_thread;
 	pthread_t tdif_thread;
+	bool recv_first;
 } handler;
 	
 time_t sec_begin, sec_end, sec_elapsed;
@@ -51,32 +55,29 @@ time_t sec_begin, sec_end, sec_elapsed;
 static handler* phandler;
 
 //Buffers
-int ad_buff[TX_BUFF_SIZE] = {0};
-int tx_buff[TX_BUFF_SIZE] = {0};
-int rx_buff[RX_BUFF_SIZE] = {0};
+char tx_buff[TX_BUFF_SIZE_BYTE];
+char rx_buff[RX_BUFF_SIZE_BYTE];
 
 struct timeval tv;
 
 int send_msg()
 {
-	int sndlen = send(phandler->sock,tx_buff, TX_BUFF_SIZE, 0);
-	if(sndlen<0)
-		DieWithError("Send msg failed");
-	else
+	int sndlen = send(phandler->sock,tx_buff, TX_BUFF_SIZE_BYTE, 0);
+	if(sndlen > 0 &&  phandler->recv_first)
 		phandler->sent_count+=sndlen;
    
-	return sndlen;	
 	//printf("Sent %d kB\n",sndlen/1024);
+	return sndlen;	
 }
 
 int recv_msg()
 {
-	int rsplen = recv(phandler->sock,rx_buff,RX_BUFF_SIZE, 0);
+	int rsplen = recv(phandler->sock,rx_buff,RX_BUFF_SIZE_BYTE, 0);
 	if(rsplen>0)
 		phandler->recv_count+=rsplen;
 
-	return rsplen;
 	//printf("Received %lld kB\n",recvcount/1024);
+	return rsplen;
 }
 
 /* RX is input, TX is output */
@@ -91,6 +92,7 @@ struct stream_cfg {
 };
 /* static scratch mem for strings */
 static char tmpstr[64];
+
 
 /* IIO structs required for streaming */
 static struct iio_context *ctx   = NULL;
@@ -239,7 +241,7 @@ bool cfg_ad9361_streaming_ch(struct iio_context *ctx, struct stream_cfg *cfg, en
 void* receive_from_server(void* arg)
 {
 	// Listen to ctrl+c and assert
-	// signal(SIGINT, shutdowniio);
+	signal(SIGINT, shutdowniio);
 	
 	struct iio_device *tx;		// Streaming devices
 	struct stream_cfg txcfg;	// Stream configurations
@@ -259,7 +261,7 @@ void* receive_from_server(void* arg)
 	iio_channel_enable(tx0_i);
 	iio_channel_enable(tx0_q);
 	txbuf = iio_device_create_buffer(tx, RX_BUFF_SIZE, false);
-
+	
 	ssize_t nbytes_tx=0;
 	void  *t_dat;
 
@@ -267,11 +269,14 @@ void* receive_from_server(void* arg)
 	while(phandler->receiving_active)
       	{
 		// Fill rx_buff from network
-		if(recv_msg())
+		if(recv_msg()>0)
 		{
+			// Advertise the connection
+			phandler->recv_first = true;
+
 			// Send rx_buff to ad9361
 			t_dat = iio_buffer_first(txbuf,tx0_i);
-			memcpy(t_dat,rx_buff,RX_BUFF_SIZE);
+			memcpy(t_dat,rx_buff,RX_BUFF_SIZE_BYTE);
 			nbytes_tx = iio_buffer_push(txbuf);
 			if (nbytes_tx < 0) 
 			{ 
@@ -283,29 +288,6 @@ void* receive_from_server(void* arg)
 	}
 	return NULL;
 }
-
-// timestamp_dif read thread 
-void* read_timedif(void* arg)
-{
-	char valrx[100];
-	int ret;
-	while(phandler->timedif_active)
-	{
-		int64_t dif_timestamp = 0;
-		// Read tx_timestamp_dif
-		ret = iio_channel_attr_read(tx0_i, "counter_timestamp", &valrx, sizeof(valrx));
-		if(ret<0)
-			printf("reading tx timestamp dif error \n");
-		else
-		{
-			sscanf(valrx,"%lld", &dif_timestamp);
-			printf("tx dif counter_timestamp: %lld \n",dif_timestamp);
-		}
-		sleep(2);
-	}
-	return NULL;
-}
-
 
 /* simple configuration and streaming */
 int main (int argc, char **argv)
@@ -326,6 +308,7 @@ int main (int argc, char **argv)
         phandler->timedif_active = 1;
         phandler->recv_count = 0;
         phandler->sent_count = 0;
+	phandler->recv_first = false;
 
 	// RX stream config
 	rxcfg.bw_hz = MHZ(5);   // 2 MHz rf bandwidth		//200KHz-56MHz Channel bandwidths 
@@ -353,7 +336,7 @@ int main (int argc, char **argv)
 
     	/* Create a datagram/UDP socket */
 	if ((phandler->sock = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0)
-		DieWithError("socket() failed");
+		DieWithError("socket creation failed");
 
 	/*Set waiting limit*/
 	tv.tv_sec = 2;
@@ -362,15 +345,12 @@ int main (int argc, char **argv)
 
 	/* Connecting to the server */
 	if (connect(phandler->sock,(struct sockaddr*) &serv, sizeof(serv)) < 0)
-		DieWithError("socket() failed");
+		DieWithError("socket connection failed");
 	
 	// Start the receiving thread
 	if(pthread_create(&phandler->recv_thread, NULL, &receive_from_server,NULL)) 
-		DieWithError("starting recv thread failed");
+		DieWithError("starting reception thread failed");
 	
-	// Start the timedif thread
-	if(pthread_create(&phandler->tdif_thread, NULL, &read_timedif,NULL)) 
-		DieWithError("starting tdif thread failed");
 
 	printf("Sending to server...\n");
 
@@ -378,7 +358,7 @@ int main (int argc, char **argv)
 	void *p_dat;
 
 	sec_begin=time(NULL);
-	while(sec_elapsed<20 && phandler->sending_active)
+	while(sec_elapsed<40 && phandler->sending_active)
 	{
 		// Timings
 		sec_end=time(NULL);
@@ -394,7 +374,7 @@ int main (int argc, char **argv)
 
 		// Send the buffer to the UDP socket
 		p_dat = iio_buffer_first(rxbuf,rx0_i);
-		memcpy (tx_buff, p_dat, TX_BUFF_SIZE);
+		memcpy (tx_buff, p_dat, TX_BUFF_SIZE_BYTE);
 		send_msg();
 	}
 

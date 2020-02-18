@@ -13,8 +13,11 @@
 #include <sys/mman.h>    
 #include <signal.h>    
 
-#define TX_BUFF_SIZE 8*1024
-#define RX_BUFF_SIZE 8*1024
+#define TX_BUFF_SIZE 32*1024 			// Number of samples
+#define RX_BUFF_SIZE 32*1024 			// Number of samples
+
+#define TX_BUFF_SIZE_BYTE TX_BUFF_SIZE*4 	// Number of bytes
+#define RX_BUFF_SIZE_BYTE RX_BUFF_SIZE*4 	// Number of bytes
 #define SERV_PORT 50707
 
 struct timeval tv;
@@ -41,14 +44,14 @@ void DieWithError(char *errorMessage)
 
 void* stream_to_client(void* arg)
 {
-	char Buffer[TX_BUFF_SIZE];				/* Buffer for echo string */
+	char Buffer[TX_BUFF_SIZE_BYTE];				/* Buffer for echo string */
 	memset(&Buffer,0,sizeof(Buffer) );
 
-	printf("Streaming to the client, TX buffer size: %d\n", TX_BUFF_SIZE);
+	printf("Streaming to the client, TX buffer size: %d bytes\n", TX_BUFF_SIZE_BYTE);
 
 	while(phandler->stream_active)
 	{
-		int sendMsgSize = sendto(phandler->sock,Buffer, TX_BUFF_SIZE, 0,(struct sockaddr*) &(phandler->ClntAddr), sizeof(phandler->ClntAddr));
+		int sendMsgSize = sendto(phandler->sock,Buffer, TX_BUFF_SIZE_BYTE, 0,(struct sockaddr*) &(phandler->ClntAddr), sizeof(phandler->ClntAddr));
 
 	        if (sendMsgSize<0)
 			DieWithError("Send msg failed");
@@ -63,7 +66,7 @@ void* stream_to_client(void* arg)
 
 int main(int argc, char *argv[])
 {
-	char Buffer[RX_BUFF_SIZE];				/* Buffer for echo string */
+	char Buffer[RX_BUFF_SIZE_BYTE];			/* Buffer for echo string */
 	int recvMsgSize;		    		/* Size of received message */
 	
 	struct sockaddr_in ServAddr;
@@ -95,7 +98,7 @@ int main(int argc, char *argv[])
 		
 	/* Block until receive message from a client */
 	unsigned int cliAddrLen = sizeof(phandler->ClntAddr);
-	if ((recvMsgSize = recvfrom(phandler->sock, Buffer, RX_BUFF_SIZE, 0,(struct sockaddr *) &(phandler->ClntAddr), &cliAddrLen)) < 0)
+	if ((recvMsgSize = recvfrom(phandler->sock, Buffer, RX_BUFF_SIZE_BYTE, 0,(struct sockaddr *) &(phandler->ClntAddr), &cliAddrLen)) < 0)
                	DieWithError("recvfrom() failed");
 	
 	phandler->recv_count += recvMsgSize;
@@ -115,7 +118,7 @@ int main(int argc, char *argv[])
 	/*Reciving*/
 	while(1)
 	{
-		recvMsgSize = recv(phandler->sock, Buffer, RX_BUFF_SIZE, 0);
+		recvMsgSize = recv(phandler->sock, Buffer, RX_BUFF_SIZE_BYTE, 0);
 		if(errno==EAGAIN)
 		{ 
 			setsockopt(phandler->sock, SOL_SOCKET, 0,&tv,sizeof(tv));
@@ -130,7 +133,8 @@ int main(int argc, char *argv[])
 	}
 
 	pthread_join(stream_thread, NULL);
-	printf("Received %lld MB in total\n",phandler->recv_count/1024/1024);
+	printf("UDP bytes received %lld MB in total\n",phandler->recv_count/1024/1024);
+	printf("UDP bytes sent %lld MB in total\n",phandler->sent_count/1024/1024);
 	close(phandler->sock);
 	free(phandler);
 	

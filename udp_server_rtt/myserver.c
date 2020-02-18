@@ -13,7 +13,8 @@
 #include <sys/mman.h>    
 #include <signal.h>    
 
-#define BUFF_SIZE 8*1024
+#define BUFF_SIZE 8*1024 		// in number of samples
+#define BUFF_SIZE_BYTE BUFF_SIZE*4
 #define SERV_PORT 50707
 
 struct timeval tv;
@@ -40,7 +41,7 @@ void DieWithError(char *errorMessage)
 
 int main(int argc, char *argv[])
 {
-	char Buffer[BUFF_SIZE];				/* Buffer for echo string */
+	char Buffer[BUFF_SIZE_BYTE];				/* Buffer for echo string */
 	int recvMsgSize;		    		/* Size of received message */
 	
 	struct sockaddr_in ServAddr;
@@ -72,7 +73,7 @@ int main(int argc, char *argv[])
 		
 	/* Block until receive message from a client */
 	unsigned int cliAddrLen = sizeof(phandler->ClntAddr);
-	if ((recvMsgSize = recvfrom(phandler->sock, Buffer, BUFF_SIZE, 0,(struct sockaddr *) &(phandler->ClntAddr), &cliAddrLen)) < 0)
+	if ((recvMsgSize = recvfrom(phandler->sock, Buffer, BUFF_SIZE_BYTE, 0,(struct sockaddr *) &(phandler->ClntAddr), &cliAddrLen)) < 0)
                	DieWithError("recvfrom() failed");
 	
 	phandler->recv_count += recvMsgSize;
@@ -85,10 +86,11 @@ int main(int argc, char *argv[])
 		DieWithError("Error");
 
 	int64_t dif_timestamp = 0;
+	int64_t tx_dif_timestamp = 0;
 	uint64_t rx_timestamp = 0;
 	while(1)
 	{
-		recvMsgSize = recv(phandler->sock, Buffer, BUFF_SIZE, 0);
+		recvMsgSize = recv(phandler->sock, Buffer, BUFF_SIZE_BYTE, 0);
 		if(errno==EAGAIN)
 		{ 
 			setsockopt(phandler->sock, SOL_SOCKET, 0,&tv,sizeof(tv));
@@ -101,27 +103,31 @@ int main(int argc, char *argv[])
 			
 		phandler->recv_count += recvMsgSize;
 
-		// Read the RX timestamp
-		uint64_t* rx_timestamp_pointer = Buffer+BUFF_SIZE-8;
+		// Read the RX timestamp and tx_dif_timestamp
+		/*uint64_t* rx_timestamp_pointer = Buffer+BUFF_SIZE_BYTE-8;
+		uint64_t* tx_dif_timestamp_pointer = Buffer+BUFF_SIZE_BYTE-16;
 		dif_timestamp = *rx_timestamp_pointer - rx_timestamp;
+		tx_dif_timestamp = *tx_dif_timestamp_pointer;
 		rx_timestamp = *rx_timestamp_pointer;		
-		printf("RX timestamp read: %llu, dif: %llu\n",*rx_timestamp_pointer,dif_timestamp);
+		printf("RX timestamp read: %llu, dif: %llu, tx_dif %lld\n",*rx_timestamp_pointer,dif_timestamp,tx_dif_timestamp);*/
 
 		// Schedule TX buffer by TX timestamp
-		uint64_t* tx_timestamp_pointer = Buffer+BUFF_SIZE-8;
+		/*uint64_t* tx_timestamp_pointer = Buffer+BUFF_SIZE_BYTE-8;
 		uint64_t old_val = *tx_timestamp_pointer;
 		*tx_timestamp_pointer = rx_timestamp;
-		printf("TX timestamp written: %llu, old_val: %llu\n",*tx_timestamp_pointer,old_val);
+		printf("TX timestamp written: %llu, old_val: %llu\n",*tx_timestamp_pointer,old_val);*/
+		//memset(&Buffer,0,sizeof(Buffer) );
 
 		// Send the TX Buffer
-		int sendMsgSize = sendto(phandler->sock,Buffer, BUFF_SIZE, 0,(struct sockaddr*) &(phandler->ClntAddr), sizeof(phandler->ClntAddr));
+		int sendMsgSize = sendto(phandler->sock,Buffer, BUFF_SIZE_BYTE, 0,(struct sockaddr*) &(phandler->ClntAddr), sizeof(phandler->ClntAddr));
                 if (sendMsgSize<0)
                         DieWithError("Send msg failed");
 
                 phandler->sent_count+=sendMsgSize;
 	}
 
-	printf("Received %lld MB in total\n",phandler->recv_count/1024/1024);
+	printf("UDP bytes received %lld MB in total\n",phandler->recv_count/1024/1024);
+	printf("UDP bytes sent %lld MB in total\n",phandler->sent_count/1024/1024);
 	close(phandler->sock);
 	free(phandler);
 	
