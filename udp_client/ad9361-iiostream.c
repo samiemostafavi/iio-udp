@@ -20,8 +20,8 @@
 #define MHZ(x) ((long long)(x*1000000.0 + .5))
 #define GHZ(x) ((long long)(x*1000000000.0 + .5))
 
-#define TX_BUFF_SIZE 8*1024
-#define RX_BUFF_SIZE 8*1024
+#define TX_BUFF_SIZE 15*1024
+#define RX_BUFF_SIZE 15*1024
 
 #define TX_BUFF_SIZE_BYTE TX_BUFF_SIZE*4
 #define RX_BUFF_SIZE_BYTE RX_BUFF_SIZE*4
@@ -92,7 +92,6 @@ struct stream_cfg {
 };
 /* static scratch mem for strings */
 static char tmpstr[64];
-
 
 /* IIO structs required for streaming */
 static struct iio_context *ctx   = NULL;
