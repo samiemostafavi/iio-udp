@@ -34,11 +34,11 @@
 #define GHZ(x) ((long long)(x*1000000000.0 + .5))
 
 #define TIMESTAMP_BUFF_SIZE 10000
-#define BUFF_SIZE 15*1024
+#define BUFF_SIZE 8*1024
 #define BUFF_SIZE_BYTE 4*BUFF_SIZE
 
 
-#define WRITE_FILE 0
+#define WRITE_FILE 1
 
 #define ASSERT(expr) { \
 	if (!(expr)) { \
@@ -217,7 +217,7 @@ bool cfg_ad9361_streaming_ch(struct iio_context *ctx, struct stream_cfg *cfg, en
 	if (!get_phy_chan(ctx, type, chid, &chn)) {	return false; }
 	wr_ch_str(chn, "rf_port_select",     cfg->rfport);
 	wr_ch_lli(chn, "rf_bandwidth",       cfg->bw_hz);
-	//wr_ch_lli(chn, "sampling_frequency", cfg->fs_hz);
+	wr_ch_lli(chn, "sampling_frequency", cfg->fs_hz);
 
 	// Configure LO channel
 	printf("* Acquiring AD9361 %s lo channel\n", type == TX ? "TX" : "RX");
